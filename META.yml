@@ -12,6 +12,12 @@ no_index:
   directory: 
     - inc
     - t
+recommends: 
+  Encode: 0
+  IO::Uncompress::Bunzip2: 0
+  IO::Uncompress::Gunzip: 0
+  MIME::Base64: 0
+  MIME::QuotedPrint: 0
 requires: 
   Class::Accessor::Fast: 0
   Class::Data::Inheritable: 0
@@ -22,4 +28,4 @@ requires:
   HTTP::Headers: 0
   HTTP::Status: 0
   Path::Class::Dir: 0
-version: 0.01
+version: 0.02

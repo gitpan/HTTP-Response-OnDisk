@@ -1,4 +1,4 @@
-# $Id: /local/perl/HTTP-Response-OnDisk/trunk/lib/HTTP/Response/OnDisk.pm 11415 2007-05-23T22:28:40.344742Z daisuke  $
+# $Id: /local/perl/HTTP-Response-OnDisk/trunk/lib/HTTP/Response/OnDisk.pm 11426 2007-05-24T14:09:05.748009Z daisuke  $
 # 
 # Copyright (c) 2007 Daisuke Maki <daisuke@endeworks.jp>
 
@@ -10,14 +10,16 @@ use Class::Inspector;
 use File::Spec;
 use File::Temp;
 use HTTP::Headers;
-use HTTP::Status;
-use Fcntl qw(SEEK_END);
+use HTTP::Status();
+use Fcntl qw(SEEK_SET SEEK_END);
 use Path::Class::Dir;
 
-our $VERSION = '0.01';
+our $URI_CLASS = $HTTP::URI_CLASS || "URI";
+
+our $VERSION = '0.02';
 
 __PACKAGE__->mk_classdata(default_dir => File::Spec->tmpdir);
-__PACKAGE__->mk_accessors($_) for qw(storage code message headers request previous protocol);
+__PACKAGE__->mk_accessors($_) for qw(storage_dir storage code message headers request previous protocol);
 
 {
     foreach my $method (@{ Class::Inspector->methods('HTTP::Headers', 'public') }) {
@@ -38,7 +40,7 @@ sub new
     $dir->mkpath;
 
     my $self = bless {}, $class;
-    $self->storage( File::Temp->new( TEMPLATE => 'hto-XXXXXXXXX', DIR => $dir->stringify, UNLINK => 1 ) );
+    $self->storage_dir($dir);
     $self->_init_storage();
 
     if (defined $header) {
@@ -64,9 +66,17 @@ sub new
 sub _init_storage
 {
     my ($self) = @_;
-    my $fh = $self->storage();
+
+    my $dir = $self->storage_dir();
+    my $fh  =  File::Temp->new( TEMPLATE => 'hto-XXXXXXXXX', DIR => $dir->stringify, UNLINK => 1 ) ;
+    $self->storage($fh);
     $fh->truncate(0); # XXX - This isn't portable, is it?
 }
+
+sub is_info     { HTTP::Status::is_info     (shift->code); }
+sub is_success  { HTTP::Status::is_success  (shift->code); }
+sub is_redirect { HTTP::Status::is_redirect (shift->code); }
+sub is_error    { HTTP::Status::is_error    (shift->code); }
 
 sub parse
 {
@@ -117,6 +127,28 @@ sub status_line
     my $code = $self->code || "000";
     my $mess = $self->message || HTTP::Status::status_message($code) || "Unknown code";
     return "$code $mess";
+}
+
+sub base
+{   
+    my $self = shift;
+    my $base = $self->header('Content-Base')     ||  # used to be HTTP/1.1
+               $self->header('Content-Location') ||  # HTTP/1.1
+               $self->header('Base');                # HTTP/1.0
+    if ($base && $base =~ /^$URI::scheme_re:/o) {
+        # already absolute
+        return $URI_CLASS->new($base);
+    }
+
+    my $req = $self->request;
+    if ($req) {
+        # if $base is undef here, the return value is effectively
+        # just a copy of $self->request->uri.
+        return $URI_CLASS->new_abs($base, $req->uri);
+    } 
+       
+    # can't find an absolute base
+    return undef;
 }
 
 sub _slurp_storage
@@ -261,6 +293,135 @@ sub as_string
     );
 }
 
+sub content_ref { die "content_ref not supported for HTTP::Response::OnDisk" }
+
+# XXX - Ripped right out of HTTP::Response, except for the content_ref part.
+sub decoded_content
+{
+    my($self, %opt) = @_;
+
+    eval {
+	require HTTP::Headers::Util;
+	my($ct, %ct_param);
+	if (my @ct = HTTP::Headers::Util::split_header_words($self->header("Content-Type"))) {
+	    ($ct, undef, %ct_param) = @{$ct[-1]};
+	    $ct = lc($ct);
+
+	    die "Can't decode multipart content" if $ct =~ m,^multipart/,;
+	}
+
+	if (my $h = $self->header("Content-Encoding")) {
+	    $h =~ s/^\s+//;
+	    $h =~ s/\s+$//;
+	    for my $ce (reverse split(/\s*,\s*/, lc($h))) {
+		next unless $ce || $ce eq "identity";
+		if ($ce eq "gzip" || $ce eq "x-gzip") {
+		    require IO::Uncompress::Gunzip;
+            # open the filehandle, and sequentially write the decoded 
+            # content to disk. For this, we swap the temp storage
+            my $source = $self->storage;
+            $source->seek(0, SEEK_SET);
+            $self->_init_storage();
+            my $dest   = $self->storage;
+            IO::Uncompress::Gunzip::gunzip($source, $dest) or
+                die "gunzip failed: $IO::Uncompress::Gunzip::GunzipError";
+		}
+		elsif ($ce eq "x-bzip2") {
+		    require IO::Uncompress::Bunzip2;
+            # open the filehandle, and sequentially write the decoded 
+            # content to disk. For this, we swap the temp storage
+            my $source = $self->storage;
+            $source->seek(0, SEEK_SET);
+            $self->_init_storage();
+            my $dest   = $self->storage;
+            IO::Uncompress::Bunzip2::bunzip2($source, $dest) or
+                die "bunzip failed: $IO::Uncompress::Bunzip::Bunzip2Error";
+		}
+		elsif ($ce eq "deflate") {
+            # XXX - Please, somebody more knowledgeable with this stuff, help.
+            # This whole deflate stuff is so rediculously expensive, I'd
+            # rather avoid it if not for completeness.
+            require IO::Uncompress::Inflate;
+            my $source = $self->storage;
+            $source->seek(0, SEEK_SET);
+            $self->_init_storage();
+            my $dest   = $self->storage;
+
+            # file handle to file handle transfer
+            unless (IO::Uncompress::Inflate::inflate($source, $dest)) {
+    			# "Content-Encoding: deflate" is supposed to mean the "zlib"
+                # format of RFC 1950, but Microsoft got that wrong, so some
+                # servers sends the raw compressed "deflate" data.  This
+                # tries to inflate this format.
+    			my($i, $status) = Compress::Zlib::inflateInit(
+    			    WindowBits => -Compress::Zlib::MAX_WBITS(),
+                );
+    			die "Can't init inflate object" unless 
+                    $i && $status == Compress::Zlib::Z_OK();
+
+                # XXX - Argh, we're reading the *entire* contents from disk...
+                my $out;
+    			($out, $status) = $i->inflate($self->content);
+    			if ($status != Compress::Zlib::Z_STREAM_END()) {
+    			    if ($status == Compress::Zlib::Z_OK()) {
+        				$self->push_header("Client-Warning" =>
+        				    "Content might be truncated; incomplete deflate stream");
+    			    } else {
+        				# something went bad, can't trust $out any more
+        				$out = undef;
+    			    }
+    			}
+    		    die "Can't inflate content" unless defined $out;
+
+                # finally write to buffer. sigh.
+                $self->content( $out );
+		    }
+		} elsif ($ce eq "compress" || $ce eq "x-compress") {
+		    die "Can't uncompress content";
+		} elsif ($ce eq "base64") {  # not really C-T-E, but should be harmless
+            # XXX - We read the entire content here, too
+		    require MIME::Base64;
+            $self->content( MIME::Base64::decode( $self->content ) );
+		} elsif ($ce eq "quoted-printable") { # not really C-T-E, but should be harmless
+            # XXX - We read the entire content here, too
+		    require MIME::QuotedPrint;
+            $self->content( MIME::QuotedPRint::decode( $self->content ) );
+		} else {
+		    die "Don't know how to decode Content-Encoding '$ce'";
+		}
+	    }
+	}
+
+	if ($ct && $ct =~ m,^text/,,) {
+	    my $charset = $opt{charset} || $ct_param{charset} || $opt{default_charset} || "ISO-8859-1";
+	    $charset = lc($charset);
+	    if ($charset ne "none") {
+    		require Encode;
+            my $source = $self->storage;
+            $source->seek(0, SEEK_SET);
+            $self->_init_storage();
+            my $dest   = $self->storage;
+            my $buffer = '';
+            while (1) {
+                my $read = $source->read($buffer, 4092, length($buffer));
+                last if ($read <= 0);
+
+                $dest->print( Encode::decode($charset, $buffer, Encode::FB_QUIET() ) );
+    	    }
+    	}
+    }
+    };
+    if ($@) {
+    	Carp::croak($@) if $opt{raise_error};
+    	return undef;
+    }
+
+    return defined wantarray ? 
+         ($opt{ref} ? \$self->content : $self->content) :
+        () # don't do anything if we're doing this in void context
+    ;
+}
+
 1;
 
 __END__
@@ -326,6 +487,12 @@ the storage.
 
 Adds content to the end of buffer.
 
+=head2 storage
+
+Returns the File::Temp object that contains the buffer. Note that when
+accessing this, you should probably do a seek() to ensure you are at the
+right location in the file.
+
 =head2 as_string
 
 Returns the string representation of the object.
@@ -351,6 +518,32 @@ Returns the status code.
 Given a string, parses it and creates a new HTTP::Response::OnDisk instance
 
 =head2 status_line
+
+=head2 base
+
+=head2 is_success
+
+=head2 is_info
+
+=head2 is_redirect
+
+=head2 is_error
+
+=head2 content_ref
+
+This doesn't make sense in HTTP::Response::OnDisk, so is intentionally not
+implemented. It will croak if used.
+
+=head2 decoded_content
+
+Attempts to decode the content based on Content-Transfer-Encoding, and the
+character set specified. Note that this method internally behaves quite
+differently from that of HTTP::Response.
+
+For now this actually overwrites the internal buffer. If you care enough
+about memory to use this module, you shouldn't be doing stuff that requires
+reading the entire buffer out anyways. Let this method take care of the
+content, and access it later.
 
 =head1 PROXIED METHODS
 
