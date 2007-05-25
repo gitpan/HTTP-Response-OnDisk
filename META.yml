@@ -24,8 +24,8 @@ requires:
   Class::Inspector: 0
   Fcntl: 0
   File::Spec: 0
-  File::Temp: 0
+  File::Temp: 0.17
   HTTP::Headers: 0
   HTTP::Status: 0
   Path::Class::Dir: 0
-version: 0.02
+version: 0.02001

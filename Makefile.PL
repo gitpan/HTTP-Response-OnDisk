@@ -9,7 +9,7 @@ requires('Class::Accessor::Fast');
 requires('Class::Data::Inheritable');
 requires('Class::Inspector');
 requires('Fcntl');
-requires('File::Temp');
+requires('File::Temp', '0.17');
 requires('File::Spec');
 requires('HTTP::Status');
 requires('HTTP::Headers');
