@@ -28,4 +28,4 @@ requires:
   HTTP::Headers: 0
   HTTP::Status: 0
   Path::Class::Dir: 0
-version: 0.02001
+version: 0.02002

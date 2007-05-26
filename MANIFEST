@@ -1,4 +1,9 @@
 Changes
+deps/base64.yaml
+deps/bunzip2.yaml
+deps/charset-decode.yaml
+deps/gunzip.yaml
+deps/quotedprint.yaml
 inc/Module/AutoInstall.pm
 inc/Module/Install.pm
 inc/Module/Install/AutoInstall.pm

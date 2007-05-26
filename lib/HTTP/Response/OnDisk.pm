@@ -1,4 +1,4 @@
-# $Id: /local/perl/HTTP-Response-OnDisk/trunk/lib/HTTP/Response/OnDisk.pm 11429 2007-05-25T01:01:09.276671Z daisuke  $
+# $Id: /local/perl/HTTP-Response-OnDisk/trunk/lib/HTTP/Response/OnDisk.pm 11653 2007-05-26T04:35:46.191733Z daisuke  $
 # 
 # Copyright (c) 2007 Daisuke Maki <daisuke@endeworks.jp>
 
@@ -16,7 +16,7 @@ use Path::Class::Dir;
 
 our $URI_CLASS = $HTTP::URI_CLASS || "URI";
 
-our $VERSION = '0.02001';
+our $VERSION = '0.02002';
 
 __PACKAGE__->mk_classdata(default_dir => File::Spec->tmpdir);
 __PACKAGE__->mk_accessors($_) for qw(storage_dir storage code message headers request previous protocol);
